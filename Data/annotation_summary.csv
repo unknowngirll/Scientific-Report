@@ -1,0 +1,5 @@
+﻿sample,total_bp,n_contigs,gc_fraction,n_CDS,n_rRNA,n_tRNA,frac_function,runtime_min
+Flye_Prokka,5243267,4,0.5066,4849,22,90,0.765,2.45
+Flye_Bakta,5243267,4,0.5066,4840,22,87,0.94,2.83
+SPAdes_Prokka,5228731,15,0.5067,4835,22,90,0.765,2.25
+SPAdes_Bakta,5228731,15,0.5067,4828,22,87,0.939,2.8
