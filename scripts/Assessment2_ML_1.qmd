@@ -1,0 +1,592 @@
+---
+title: "LIFE748 - Part 2: Machine Learning Analysis of Differential Expression"
+author: "Francesco Del Carratore"
+format: html
+editor: visual
+
+# GAI Declaration: I 201930340 declare that Generative AI (Google Gemini) was used to troubleshoot R code errors, format ggplot2 visualizations
+---
+
+## Introduction
+
+In this analysis , we will analyze a simulated RNA-seq dataset. Our goal is to identify Differentially Expressed Genes (DEGs) between two conditions (Condition A and Condition B), visualize the results, and use both unsupervised (k-means and hierarchical clustering) and supervised machine learning techniques ( logistic regression, Linear Discriminant Analysis (LDA), and Support Vector Machines (SVM)) to build predictive models. Model performance is evaluated using accuracy, sensitivity and 7-fold cross-validation.
+
+## Step 0: Load the required libraries
+
+```{r warning=FALSE, message=FALSE }
+
+# Bioconductor packages for DEG analysis and visualisation
+install.packages("BiocManager")
+
+BiocManager::install("DESeq2")
+
+BiocManager::install("EnhancedVolcano") 
+library(DESeq2)          # Differential expression analysis
+library(EnhancedVolcano) 
+library(pheatmap)        
+
+# CRAN packages for ml and plotting
+library(ggplot2)         
+library(ggrepel)         # Non-overlapping labels on plots
+library(tidyr)           
+library(caret)           
+library(MASS)            
+library(e1071)           # svm function
+
+
+```
+
+## Step 1: Load the Count Matrix
+
+First, we load the raw count matrix and set up the sample metadata (phenotype data).Rows are genes , and columns are the 50 samples. We assume the first 25 columns belong to Condition A, and the next 25 belong to Condition B.
+
+```{r}
+# Load the raw count matrix and we put gene IDs as row names
+counts <- read.csv("dataset_LIFE748_1.csv", row.names = 1)
+
+# we need to creat sample data like first 25 = Condition A, last 25 = Condition B
+colData <- data.frame(
+  row.names = colnames(counts),
+  Condition = c(rep('CondA',25),rep('CondB',25))
+)
+cat ("Dataset information : ", nrow(counts), "genes and", ncol(counts), "samples\n")
+cat("The number of Condition A samples:", sum(colData$Condition == "CondA"), "\n")
+cat("The number of Condition B samples:", sum(colData$Condition == "CondB"), "\n")
+
+```
+
+## Step 2: Normalize and Identify DEGs with DESeq2
+
+We will use `DESeq2` to normalize the library sizes and perform statistical testing to identify which genes are differentially expressed between Condition B and Condition A.
+
+```{r}
+# 1. Create the DESeq2 dataset object
+dds <- DESeqDataSetFromMatrix(countData = counts,
+                              colData = colData,
+                              design = ~ Condition)
+
+# 2. Run the DESeq2 pipeline
+dds <- DESeq(dds)
+
+# 3. Extract the results (Condition B vs Condition A)
+res <- results(dds)
+
+# 4. Convert this object into a dataframe for easier visualisation (optional)
+
+res <- as.data.frame(res)
+
+# 5. Extract normalized counts for downstream machine learning
+vsd <- vst(dds, blind = FALSE) # Variance stabilizing transformation
+normalized_counts <- assay(vsd)
+
+```
+
+## Step 3: Report DEGs (Table and Volcano Plot)
+
+We define statistically significant DEGs as those with an adjusted p-value (FDR) \< 0.05 and an absolute log2 Fold Change \> 1.
+
+```{r}
+significant_degs <- subset(res, padj < 0.05 & abs(log2FoldChange) > 1) #(FDR < 0.05 and log2FC > 1)
+significant_degs <- significant_degs[order(significant_degs$padj), ] # Sort by adjusted p-value (most significant first)
+cat("Total number of significant DEGs (FDR < 0.05, |log2FC| > 1):", nrow(significant_degs), "\n") #showing how many genes found 
+head(significant_degs)
+```
+
+Generate a volcano plot to visualise the results
+
+```{r fig.width=10, fig.height=8}
+EnhancedVolcano(res,
+    lab = rownames(res),
+    x = "log2FoldChange",
+    y = "padj",
+    pCutoff = 0.05,
+    FCcutoff = 1,
+    title = "Condition B vs Condition A",
+    subtitle = "FDR < 0.05, |Log2FC| > 1",
+    pointSize = 2,               
+    labSize = 3.0,                 
+    drawConnectors = TRUE,          
+    widthConnectors = 0.5,          
+    max.overlaps = 25,
+    lengthConnectors = unit(0.01, "npc"), 
+    legendPosition = "right"        
+)
+```
+
+## Step 4: Isolate Differentially Expressed Genes
+
+To reduce noise and dimensionality for our machine learning algorithms, we will subset our normalized count matrix to only include the statistically significant DEGs identified above.
+
+In order to make sure we don't lose too much information, let's relax a bit the thresholds for significance
+
+Each sample becomes a row, and each significant DEG becomes a feature (column) ,this is the standard format required by all ML functions used here.
+
+```{r}
+
+sig_genes <- rownames(subset(res, padj < 0.1 & abs(log2FoldChange) > 0.5))
+cat("Total number of significant DEGs :", length(sig_genes), "\n")
+# Subset the VST-normalised matrix to significant DEGs only
+vsd_sig <- normalized_counts[sig_genes, ]
+# Transpose: ML expects rows = samples, columns = genes
+ml_data <- as.data.frame(t(vsd_sig))
+# Adding condition labels as a factor column for supervised methods
+ml_data$Condition <- as.factor(colData$Condition)
+```
+
+## Step 5: Unsupervised Clustering
+
+Let's see if the samples naturally group by their condition without explicitly telling the algorithm which sample belongs to which group. We will use Hierarchical Clustering and K-means.
+
+### 5a: Elbow Test : Choosing the Optimal k for K-means
+
+we need to specify the number of clusters (K) in advance, The elbow method helps us choose k objectively by plotting the total (WCSS) against k. WCSS decreases as k increases, but the rate of decrease slows after the optimal k. We test k = 1 to 10.
+
+```{r}
+
+set.seed(123)  # set seed for reproducibility (k-means has a random initialisation step)
+
+k.max <- 10
+
+# Calculate WCSS for each value of k from 1 to 10
+wss <- sapply(1:k.max, function(k) {
+  kmeans(ml_data[, -ncol(ml_data)],   # ignore the Condition label column
+         centers  = k,
+         nstart   = 5,                # run 5 times with different initialisations
+         iter.max = 15)$tot.withinss  
+})
+
+# Plotting
+elbow_df <- data.frame(k = 1:k.max, WSS = wss)
+
+ggplot(elbow_df, aes(x = k, y = WSS)) +
+  geom_line() +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 1:k.max) +
+  theme(panel.background = element_rect(fill = "white", colour = "black", linewidth = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        text = element_text(size = 14, colour = "black")) +
+  labs(title = "The Number of Clusters for K-means",
+       x     = "Number of Clusters (k)",
+       y     = "Total Within-Cluster Sum of Squares (WCSS)")
+
+```
+
+### 5b: K-means Clustering (k = 2)
+
+Based on the elbow test and the known two-condition experimental design, we run k-means with k = 2. We use `nstart = 5` to reduce sensitivity to random initialisation
+
+```{r}
+set.seed(123)
+kmeans_out <- kmeans(ml_data[, -ncol(ml_data)], centers = 2, iter.max = 15, nstart = 5)
+# Contingency table: do the clusters align with the true conditions?
+cat("K-means cluster assignments vs. True Condition:\n\n")
+table(Cluster = kmeans_out$cluster, True_Condition = ml_data$Condition)
+```
+
+Because our data is high-dimensional (many genes), we use PCA to reduce it to two dimensions for visualisation
+
+```{r}
+
+# Run PCA on the gene expression features (excluding Condition label)
+pca_res <- prcomp(ml_data[, -ncol(ml_data)], scale. = TRUE)
+
+# Extract PC1 and PC2 scores for each sample
+pca_df <- data.frame(
+  PC1              = pca_res$x[, 1],
+  PC2              = pca_res$x[, 2],
+  KMeans_Cluster   = as.factor(kmeans_out$cluster),
+  True_Condition   = ml_data$Condition
+)
+
+# Calculate variance explained by PC1 and PC2 for axis labels
+var_explained <- round(summary(pca_res)$importance[2, 1:2] * 100, 1)
+
+# in this Plot: colour = k-means cluster and shape = true condition
+ggplot(pca_df, aes(x = PC1, y = PC2,
+                   colour = KMeans_Cluster,
+                   shape  = True_Condition)) +
+  geom_point(size = 3) +
+  theme(panel.background = element_rect(fill = "white", colour = "black", linewidth = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        text = element_text(size = 14)) +
+  labs(title  = "PCA Plot: K-means Cluster Assignments vs True Condition",
+       x      = paste0("PC1 (", var_explained[1], "% variance)"),
+       y      = paste0("PC2 (", var_explained[2], "% variance)"),
+       colour = "K-means Cluster",
+       shape  = "True Condition")
+
+```
+
+### 5c: Hierarchical Clustering
+
+A dendrogram based on pairwise distances, without requiring k to be specified in advance. Unlike k-means, it does not assume spherical clusters. The choice of linkage method significantly affects results. We use Ward's method (`ward.D2`), ths method minimises the increase in total within-cluster variance at each merging step and tends to produce compact and balanced clusters
+
+```{r fig.width=10, fig.height=6}
+# Step 1: Calculate pairwise Euclidean distances between all samples
+dist_mat <- dist(ml_data[, -ncol(ml_data)], method = 'euclidean')#
+# Step 2: Build the dendrogram using Ward's linkage
+hclust_out <- hclust(dist_mat, method = 'ward.D2')
+# Step 3: Plot the dendrogram and highlight k=2 clusters in red
+plot(hclust_out, main = "Hierarchical Clustering of Samples", xlab = "Samples", sub="",cex  = 0.7)
+rect.hclust(hclust_out, k = 2, border = "red")
+```
+
+Visualise the results (HINT: an heatmap would be perfect for this).
+
+In the heatmap rows are DEGs, columns are samples, and colour intensity represents normalised expression level. Hierarchical clustering is applied to both rows (genes) and columns (samples) simultaneously
+
+```{r fig.width=10, fig.height=8}
+
+
+# Create annotation dataframe with BOTH condition and k-means cluster
+annotation_df <- data.frame(
+  row.names  = rownames(ml_data),
+  Condition  = ml_data$Condition,
+  KMeans     = as.factor(kmeans_out$cluster)  
+)
+
+# Define colours for the annotations
+annotation_colours <- list(
+  Condition = c(CondA = "#386cb0", CondB = "#ef3b2c"),
+  KMeans    = c("1" = "#f1a340",  "2"   = "#998ec3")
+)
+
+pheatmap(vsd_sig,
+         cluster_cols    = TRUE,
+         cluster_rows    = TRUE,
+         annotation_col  = annotation_df,        
+         annotation_colors = annotation_colours,
+         show_rownames   = FALSE,
+         main            = "Heatmap of Significant DEGs (with K-means Clusters)")
+```
+
+### 5d: Comparing Unsupervised Methods
+
+We compare how well both clustering methods recovered the true condition labels by cross-tabulating cluster assignments against known conditions.
+
+```{r}
+
+# Extract flat cluster assignments from the dendrogram (cut at k=2)
+hclust_labels <- cutree(hclust_out, k = 2)
+
+cat("Hierarchical Clustering vs True Condition:\n")
+table(HC_Cluster = hclust_labels, True_Condition = ml_data$Condition)
+
+cat("\nK-means Clustering vs True Condition:\n")
+table(KMeans_Cluster = kmeans_out$cluster, True_Condition = ml_data$Condition)
+
+```
+
+## Step 6: split data for Supervised Learning
+
+Next, we train classifiers to predict the condition of a sample based on its DEG expression profile. we split the data into a training set (70%) used to fit the model, and a test set (30%) .We use `createDataPartition` from the `caret` package to ensure both splits have balanced condition proportions.
+
+```{r}
+set.seed(122)
+# Stratified 70/30 split preserving condition proportions
+trainIndex <- createDataPartition(ml_data$Condition, p = 0.7, list = FALSE)
+
+df_train <- ml_data[trainIndex, ]
+df_test <- ml_data[-trainIndex, ]
+
+cat("Training samples:", nrow(df_train), "\n")
+cat("Test samples: ", nrow(df_test),  "\n")
+
+```
+
+## Step 7: Logistic Regression
+
+Because our dataset has far more features (DEGs) than samples, fitting logistic regression directly causes singularity. We therefore apply PCA pre-processing to reduce dimensionality before fitting, retaining the top 20 principal components which capture the majority of variance in the data.
+
+```{r}
+
+# Apply PCA to training data features (excluding the Condition label column)
+pca_train <- prcomp(df_train[, -ncol(df_train)], scale. = TRUE)
+
+#The min function ensures we don't ask for more PCs than the number of available samples
+n_comp <- min(20, ncol(pca_train$x))
+
+# Create a new dataframe containing only the top 20 PCs from the training data
+train_pca_df<- as.data.frame(pca_train$x[, 1:n_comp])
+
+# Append the Condition col back to the PCA reduced dataset
+train_pca_df$Condition <- df_train$Condition
+
+#Project test data onto the SAME PCA space (using training PCs)
+test_proj<- predict(pca_train, newdata = df_test[, -ncol(df_test)])
+
+test_pca_df<- as.data.frame(test_proj[, 1:n_comp])
+test_pca_df$Condition<- df_test$Condition
+
+# fit the model
+model_LR <- glm(Condition ~ ., data = train_pca_df, family = 'binomial')
+
+```
+
+```{r}
+
+# Predict probabilities on the test set
+pred_LR_prob<- predict(model_LR, newdata = test_pca_df, type = 'response')
+
+#Convert probabilities to class labels using 0.5 threshold
+#probability >= 0.5 is CondB, otherwise it's CondA
+pred_LR_class <- ifelse(pred_LR_prob >= 0.5, "CondB", "CondA")
+pred_LR_class <- factor(pred_LR_class, levels = levels(df_test$Condition))
+
+
+CM_LR <- confusionMatrix(data = pred_LR_class, reference = df_test$Condition)
+print(CM_LR)
+
+```
+
+## Step 8: Linear Discriminant Analysis (LDA)
+
+LDA finds linear combinations of gene expression features that maximise the separation between conditions.The resulting LD1 axis provides the most discriminating direction through the data, and its coefficients tell us which genes contribute most to separating the conditions.
+
+```{r}
+# Train LDA model using all DEG features in the training set
+model_LDA <- lda(Condition ~ ., data = df_train)
+
+# Predict condition labels for the test set
+pred_LDA <- predict(model_LDA, newdata = df_test)
+
+
+CM_LDA <- confusionMatrix(data= as.factor(pred_LDA$class),reference = df_test$Condition)
+print(CM_LDA)
+
+```
+
+## Step 9: Support Vector Machine (SVM) — Multiple Kernels
+
+SVM finds the optimal hyperplane that maximises the margin between classes.We test all four kernels (linear, radial, polynomial, sigmoid) since the best kernel depends on the data structure and cannot be assumed in advance.
+
+```{r}
+
+# Test all four SVM kernel functions and store results
+
+kernels <- c('linear', 'radial', 'polynomial', 'sigmoid')
+svm_results <- list()
+
+for (k in kernels) {
+  set.seed(123)
+  
+  # Train SVM with the specified kernel on training data
+  model_k <- svm(Condition ~ ., data = df_train, kernel = k)
+  
+  # Predict on test set
+  pred_k  <- predict(model_k, newdata = df_test)
+  
+  #confusion matrix
+  cm_k <- confusionMatrix(data= as.factor(pred_k), reference = df_test$Condition)
+  svm_results[[k]] <- cm_k # Store the CM in list using the kernel name as the key
+  
+  cat(paste0("\n--------- SVM (", k, " kernel) Confusion Matrix --------\n"))
+  print(cm_k)
+}
+
+```
+
+## Step 10: Model Comparison Summary
+
+Finally, we use confusion matrices to evaluate and compare how well LDA and SVM performed on the unseen test dataset.
+
+```{r}
+# Helper function: extract key metrics from a confusionMatrix object
+extract_metrics <- function(cm, model_name) {
+  data.frame(
+    Model= model_name,
+    Accuracy= round(cm$overall["Accuracy"],3),
+    Sensitivity = round(cm$byClass["Sensitivity"],3),
+    Specificity = round(cm$byClass["Specificity"], 3),
+    Kappa = round(cm$overall["Kappa"],3)
+  )
+}
+
+# Combine metrics from all models into one table
+comparison_table <- rbind(
+  extract_metrics(CM_LR,"Logistic Regression"),
+  extract_metrics(CM_LDA,"LDA"),
+  extract_metrics(svm_results[["linear"]],"SVM (linear)"),
+  extract_metrics(svm_results[["radial"]],"SVM (radial)"),
+  extract_metrics(svm_results[["polynomial"]],"SVM (polynomial)"),
+  extract_metrics(svm_results[["sigmoid"]],"SVM (sigmoid)")
+)
+
+rownames(comparison_table) <- NULL
+print(comparison_table)
+
+```
+
+```{r fig.width=9, fig.height=5}
+
+# Reshape to long format for ggplot2 grouped bar chart
+comp_long <- pivot_longer(comparison_table,cols= c(Accuracy, Sensitivity,Specificity),names_to  = "Metric",values_to = "Value")
+
+ggplot(comp_long, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  ylim(0, 1) +
+  theme(panel.background = element_rect(fill = "white", colour = "black", linewidth = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        text             = element_text(size = 12),
+        axis.text.x      = element_text(angle = 30, hjust = 1)) +
+  labs(title = "Classifier Performance Comparison (Accuracy, Sensitivity, Specificity)",
+       x     = "Model",
+       y     = "Score",
+       fill  = "Metric")
+
+```
+
+## Step 11: Is this enough?
+
+is this enough to compare the classifiers? What if you use a k-fold cross-validation approach? Will you get similar results with different random splits?
+
+## Step 12: 7-Fold Cross-Validation for All Models
+
+7-fold cross-validation divides the data into 7 equal folds, training on 6 and testing on the remaining 1, repeating this 7 times so every sample is used as a test sample exactly once. The final performance estimate is averaged across all 7 folds.
+
+```{r}
+
+# Define 7-fold cross-validation settings
+ctrl <- trainControl(method= "cv",number= 7,summaryFunction = twoClassSummary,  # use twoClassSummary to report ROC-AUC, sensitivity, and specificity
+                     classProbs= TRUE,
+                     savePredictions = TRUE)
+
+```
+
+### Logistic Regression with 7-fold CV
+
+```{r warning=FALSE, message=FALSE}
+
+# preProcess = "pca" i added this because PCA within each fold to prevents data leakage
+set.seed(123)
+cv_LR <- train(Condition ~ .,
+               data       = ml_data,
+               method     = "glm",
+               family     = "binomial",
+               preProcess = c("pca"),
+               trControl  = ctrl,
+               metric     = "ROC")
+
+cat(" 7-Fold CV: Logistic Regression \n")
+print(cv_LR$results)
+```
+
+### LDA with 7-fold CV
+
+```{r warning=FALSE, message=FALSE}
+set.seed(123)
+cv_LDA <- train(Condition ~ .,
+                data       = ml_data,
+                method     = "lda",
+                preProcess = c("pca"),
+                trControl  = ctrl,
+                metric     = "ROC")
+
+cat(" 7-Fold CV: LDA \n")
+print(cv_LDA$results)
+
+```
+
+### SVM with linear kernel and 7-fold CV
+
+```{r warning=FALSE, message=FALSE}
+set.seed(123)
+cv_SVM_linear <- train(Condition ~ .,
+                        data       = ml_data,
+                        method     = "svmLinear",
+                        preProcess = c("pca"),
+                        trControl  = ctrl,
+                        metric     = "ROC")
+
+cat("7-Fold CV: SVM (linear kernel) \n")
+print(cv_SVM_linear$results)
+
+```
+
+### SVM with radial kernel and 7-fold CV
+
+```{r warning=FALSE, message=FALSE}
+set.seed(123)
+cv_SVM_radial <- train(Condition ~ .,
+                        data       = ml_data,
+                        method     = "svmRadial",
+                        preProcess = c("pca"),
+                        trControl  = ctrl,
+                        metric     = "ROC")
+
+cat(" 7-Fold CV: SVM (radial kernel)\n")
+print(cv_SVM_radial$results)
+
+```
+
+## Step 12: Cross-Validation Results Summary
+
+```{r}
+
+# Summarise 7-fold CV results for all models in one final table 
+
+cv_summary <- data.frame(
+  Model = c("Logistic Regression", "LDA","SVM (linear)", "SVM (radial)"),
+  CV_ROC_AUC = c(
+    round(max(cv_LR$results$ROC),3),
+    round(max(cv_LDA$results$ROC),3),
+    round(max(cv_SVM_linear$results$ROC),3),
+    round(max(cv_SVM_radial$results$ROC),3)
+  ),CV_Sensitivity = c(
+    round(max(cv_LR$results$Sens),3),
+    round(max(cv_LDA$results$Sens),3),
+    round(max(cv_SVM_linear$results$Sens),3),
+    round(max(cv_SVM_radial$results$Sens),3)
+  ), CV_Specificity = c(
+    round(max(cv_LR$results$Spec), 3),
+    round(max(cv_LDA$results$Spec),3),
+    round(max(cv_SVM_linear$results$Spec),3),
+    round(max(cv_SVM_radial$results$Spec), 3)
+  )
+)
+
+print(cv_summary)
+
+```
+
+## Step 13: Which Genes Are Most Biologically Informative?
+
+LDA is utilized for this because it perfectly balances classification performance with high biological interpretability. It calculates specific mathematical coefficients (loadings) for every single gene on the linear discriminant axis (LD1). By extracting and ranking the genes with the highest absolute coefficients, we can pinpoint exactly which genes are driving the separation between the groups.
+
+```{r}
+
+# Extract LDA scaling coefficients (LD1 loadings for each gene)
+lda_loadings<- as.data.frame(model_LDA$scaling)
+lda_loadings$Gene<- rownames(lda_loadings)
+lda_loadings$AbsLD1<- abs(lda_loadings$LD1)
+
+# Sort by absolute LD1 value
+lda_loadings <- lda_loadings[order(-lda_loadings$AbsLD1), ]
+top20_genes  <- head(lda_loadings, 20)
+
+cat("Top 20 most discriminating genes by LDA |LD1| coefficient:\n")
+print(top20_genes[, c("Gene", "LD1", "AbsLD1")])
+
+```
+
+We cross-reference the top LDA discriminators against the statistically significant DEGs from DESeq2. Genes appearing in both lists are the strongest candidates for biological follow-up
+
+```{r}
+
+# Find genes that are top LDA discriminators AND significant DEGs
+overlap <- intersect(top20_genes$Gene, rownames(significant_degs)) #to extract the in common gene betweeen these lists
+
+cat("Genes in BOTH top 20 LDA discriminators AND significant DEGs:\n")
+print(overlap)
+
+if (length(overlap) > 0) {
+  cat("\nDESeq2 statistics for these overlapping genes:\n")
+  print(significant_degs[overlap, c("log2FoldChange", "padj")])
+}
+
+```
+
+### These overlapping genes are the key biologically informative markers. We will use these specific genes in the next step to predict their protein structures using AlphaFold 3.

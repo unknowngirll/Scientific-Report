@@ -1,0 +1,75 @@
+# GAI Declaration: I 201930340 declare thati used AI for this part 
+ AI Tool Used: Google Gemini
+Purpose: To troubleshoot PyMOL terminal errors (such as fetch and object naming errors).
+
+# extract chain A for foldseek
+set_name fold_trer_dna_complex_model_0, AF3_Model
+save b4241_chainA.pdb, AF3_Model and chain A
+
+# align with experimental structure 4XXH
+fetch 4XXH 
+cealign AF3_Model and chain A, 4XXH
+color pink, 4XXH
+
+# map GPSite prediction
+set_name PLOCGI_01344_HTH-type_transcriptional_regulator_TreR_DNA, TreR_GPSite
+align TreR_GPSite, AF3_Model
+show surface, TreR_GPSite
+spectrum b, blue_white_red, TreR_GPSite
+
+# map ConSurf conservation
+set_name treaR_b4241_chainA_A_ATOMS_section_With_ConSurf, TreR_Consurf
+align TreR_Consurf, AF3_Model
+show surface, TreR_Consurf
+spectrum b, rainbow_rev, TreR_Consurf
+
+# display setup and electrostatics
+set grid_mode, 1
+orient
+set transparency, 0.4, AF3_Model_e_pot
+bg_color white
+
+
+------------------------------
+
+# extract chain A for foldseek
+set_name fold_fear_model_0, AF3
+save FeaR_chainA.pdb, AF3 and chain A
+remove not chain A
+
+# align with experimental structure 5NLA
+fetch 5NLA 
+cealign AF3 and chain A, 5NLA
+color pink, 5NLA
+
+# map GPSite prediction
+set_name sp_Q47129_DNA, GPSite_Model
+align GPSite_Model, AF3
+show surface, GPSite_Model
+spectrum b, blue_white_red, GPSite_Model
+
+# map ConSurf conservation
+set_name feaR_FeaR_protein_A_ATOMS_section_With_ConSurf, FeaR_Consurf
+align FeaR_Consurf, AF3
+show surface, FeaR_Consurf
+spectrum b, rainbow_rev, FeaR_Consurf
+# via the PyMOL (A > generate > vacuum electrostatics)
+# display setup and electrostatics
+set transparency, 0.4, AF3_e_pot
+set grid_mode, 1
+orient
+
+# final render
+bg_color white
+ray 2400, 2400
+png Figure_6_FeaR_Consensus.png, dpi=300
+
+# highlight predicted DNA binding residues
+set_name fold_fear_model_0, AF3
+color gray80, polymer.protein
+select hotspots, AF3 and resi 215+216+226+228+231+232+240+242+246+279+280
+show sticks, hotspots
+color red, hotspots
+color orange, polymer.nucleic
+ray 1200
+png C:/Users/ALFA RAYAN/Downloads/fold_fear/A3+GPsite.png, 0, 0, -1, ray=0
