@@ -1,0 +1,127 @@
+PyMOL>set_name fold_fear_model_0, AF3
+PyMOL>color gray80, polymer.protein
+PyMOL>select hotspots, AF3 and resi 215+216+226+228+231+232+240+242+246+279+280
+PyMOL>show sticks, hotspots
+PyMOL>color red, hotspots
+PyMOL>color orange, polymer.nucleic
+PyMOL>ray 1200
+PyMOL>png C:/Users/ALFA RAYAN/Downloads/fold_fear/A3+GPsite.png, 0, 0, -1, ray=0
+
+
+
+PyMOL>save FeaR_protein.pdb, AF3 and chain A
+PyMOL>fetch 5NLA
+PyMOL>cealign FeaR_protein, 5NLA
+PyMOL>color pink, 5NLA
+
+PyMOL>set_name fold_fear_model_0, AF3
+PyMOL>spectrum b, red_yellow_green_cyan_blue, minimum=50, maximum=90
+
+hide everything
+create AF3_A, AF3 and chain A
+align FeaR_Consurf, AF3_A
+disable AF3
+show surface, FeaR_Consurf
+spectrum b, rainbow_rev, FeaR_Consurf
+set grid_mode, 1
+orient
+
+
+set_name fold_fear_model_0, AF3
+remove not chain A
+
+# 2. Rename External Data Models
+# Simplify the names of the ConSurf and GPSite objects for easier handling
+set_name feaR_FeaR_protein_A_ATOMS_section_With_ConSurf, FeaR_Consurf
+set_name sp_Q47129_DNA, GPSite_Model
+
+# 3. Structural Alignment
+# Superimpose the evolutionary (ConSurf) and sequence-based (GPSite) models onto the main AF3 structure
+align FeaR_Consurf, AF3
+align GPSite_Model, AF3
+
+# Note: The vacuum electrostatics surface (AF3_e_pot) was successfully generated here via the PyMOL GUI (A > generate > vacuum electrostatics)
+
+# 4. Configure Electrostatic View
+# Make the electrostatic potential surface slightly transparent to reveal the underlying helices
+set transparency, 0.4, AF3_e_pot
+
+# 5. Configure Evolutionary Conservation View
+# Display the surface and color based on ConSurf scores (Blue = Highly Conserved)
+show surface, FeaR_Consurf
+spectrum b, rainbow_rev, FeaR_Consurf
+
+# 6. Configure Deep Learning Prediction View
+# Display the surface and color based on GPSite binding probabilities (Red = High Binding Probability)
+show surface, GPSite_Model
+spectrum b, blue_white_red, GPSite_Model
+
+# 7. Final Multi-View Setup
+# Enable grid mode to display the consensus models side-by-side and synchronize their rotation
+set grid_mode, 1
+orient
+
+# 8. Render Image
+# Generate a high-quality ray-traced image for the final assessment report
+ray 640, 480, async=1
+
+
+
+
+
+
+
+-------------------------------------
+treaR b4241
+
+#Rename the loaded AlphaFold 3 model for easier handling
+set_name fold_trer_dna_complex_model_0, AF3_Model
+
+#Extract and save only Chain A to use for the Foldseek search
+save b4241_chainA.pdb, AF3_Model and chain A
+
+#Load the experimental reference structure (TreR) which I got from foldseek
+fetch 4XXH 
+
+#Perform the structural alignment
+# Superimpose Chain A of AF3 model onto the 4XXH 
+cealign AF3_Model and chain A, 4XXH
+#RMSD 0.918973 over 248 residues
+
+# 5. Color the reference structure pink to make it stand out in the comparison
+color pink, 4XXH
+
+# 6. Render a high-quality, high-resolution image for the report
+ray 807, 480, async=1
+
+
+# --- Setup & Naming ---
+# Rename the AlphaFold complex and extract Chain A for Foldseek
+set_name fold_trer_dna_complex_model_0, AF3_Model
+save b4241_chainA.pdb, AF3_Model and chain A
+
+# --- Structural Validation (The Real Experiment) ---
+# Load the experimental structure 4XXH and align with the prediction
+fetch 4XXH 
+cealign AF3_Model and chain A, 4XXH
+color pink, 4XXH
+
+# --- Functional Validation (GPSite) ---
+# Rename the long GPSite filename and align it to the main model
+set_name PLOCGI_01344_HTH-type_transcriptional_regulator_TreR_DNA, TreR_GPSite
+align TreR_GPSite, AF3_Model
+show surface, TreR_GPSite
+spectrum b, blue_white_red, TreR_GPSite
+
+# --- Evolutionary Validation (ConSurf) ---
+# Rename the ConSurf file and align it to the main model
+set_name treaR_b4241_chainA_A_ATOMS_section_With_ConSurf, TreR_Consurf
+align TreR_Consurf, AF3_Model
+show surface, TreR_Consurf
+spectrum b, rainbow_rev, TreR_Consurf
+
+# --- Visualization & Physics ---
+# Generate Electrostatic Potential (done via GUI) and set view
+set grid_mode, 1
+orient
+set transparency, 0.4, AF3_Model_e_pot
