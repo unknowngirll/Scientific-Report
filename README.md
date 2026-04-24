@@ -21,6 +21,6 @@ LIFE748_Assessment2/
 ├── scripts/                 # Source code used for the analysis
 │   ├── Part1_code.sh        # Bash script for assembly and annotation
 │   ├── Part2_code.qmd       # Quarto/R document for Machine Learning workflow
-│   ├── Part3.txt            # PyMOL rendering script for TreR
-│                            # PyMOL rendering script for FeaR
+│   ├── Part3.txt           
+│                         
 └── results/                 # Final output figures, PAE plots, and benchmarking tables
