@@ -4,7 +4,7 @@ This directory contains the input datasets utilized across the three parts of th
 
 Below is a detailed justification of the data used at each stage of the analysis:
 
-## Part 1: Genome Assembly and Annotation (`part1_genomics/`)
+## Part 1: Genome Assembly and Annotation 
 **Data Used:** * PacBio HiFi sequencing reads (Clinical E. coli/Shigella isolate: GN3 / GN6 / GN9) at ~30x coverage.
 
 **Why this data was used:**
@@ -12,7 +12,7 @@ To benchmark state-of-the-art genome assembly tools (Flye vs. SPAdes) and annota
 
 ---
 
-##  Part 2: Machine Learning Analysis (`part2_ml/`)
+##  Part 2: Machine Learning Analysis 
 **Data Used:** * Pre-processed Differential Expression Gene (DEG) count matrix.
 
 **Why this data was used:**
@@ -20,7 +20,7 @@ This dataset contains the gene expression profiles of *E. coli* under two distin
 
 ---
 
-## Part 3: Structural Bioinformatics (`part3_structural/`)
+## Part 3: Structural Bioinformatics
 **Data Used:**
 * **Primary Sequences (FASTA):** Amino acid sequences of selected Transcription Factors (TFs) like TreR and FeaR, extracted from the Part 1 Bakta/Prokka annotations.
 * **AlphaFold 3 Models (.pdb):** High-confidence predicted 3D structures and their associated PAE (Predicted Aligned Error) JSON files.
